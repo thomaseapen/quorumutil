@@ -1,101 +1,138 @@
-# quorumutil
+package com.test;
 
-
-import com.esaulpaugh.headlong.abi.Function;
-import com.esaulpaugh.headlong.abi.TypeReference;
-import com.esaulpaugh.headlong.abi.Tuple;
-import com.esaulpaugh.headlong.abi.Address;
-import com.esaulpaugh.headlong.util.UInt256;
-import org.web3j.crypto.ECKeyPair;
-import org.web3j.crypto.Sign;
-import org.web3j.utils.Convert;
+import org.web3j.crypto.*;
+import org.web3j.abi.datatypes.*;
+import org.web3j.abi.datatypes.generated.Uint256;
+import org.web3j.abi.FunctionEncoder;
+import org.web3j.abi.Function;
+import org.web3j.utils.Numeric;
+import org.web3j.protocol.Web3j;
+import org.web3j.protocol.http.HttpService;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
-public class UserOpClient {
+public class AlchemyBundler4337WithSignature {
+    private static final String ALCHEMY_API_URL = "https://eth-mainnet.alchemyapi.io/v2/YOUR_ALCHEMY_API_KEY";  // Replace with your Alchemy API key
+
+    private static final String BUNDLER_URL = "https://eth-mainnet.alchemyapi.io/v2/YOUR_ALCHEMY_API_KEY";  // Replace with Alchemy's Bundler API URL
+
     private static final String SENDER_PRIVATE_KEY = "YOUR_PRIVATE_KEY";  // Replace with sender's private key
-    private static final String TARGET_CONTRACT_ADDRESS = "0xYourTargetContractAddress";  // Replace with your target contract
-    private static final String PAYMASTER_CONTRACT_ADDRESS = "0xYourPaymasterAddress";  // Replace with your Paymaster contract
-    private static final String ENTRYPOINT_CONTRACT_ADDRESS = "0xYourEntryPointAddress";  // Replace with your EntryPoint contract
 
-    // Prepare UserOp data and send to Ethereum network via HTTP JSON-RPC
-    public static void sendUserOpWithPaymaster() throws Exception {
-        // Prepare the UserOp data (contract call, arguments, gas, max fees)
-        String functionSignature = "someFunction(uint256)";
-        BigInteger gasLimit = BigInteger.valueOf(100000);  // Set gas limit for the transaction
-        BigInteger maxPriorityFeePerGas = Convert.toWei("2", Convert.Unit.GWEI).toBigInteger();
-        BigInteger maxFeePerGas = Convert.toWei("20", Convert.Unit.GWEI).toBigInteger();
-        BigInteger functionArgument = BigInteger.valueOf(42);  // Example argument
+    public static void main(String[] args) {
+        try {
+            // Prepare the mint function call data
+            String contractAddress = "0xYourContractAddress"; // Replace with actual contract address
+            String toAddress = "0xRecipientAddress"; // Replace with the recipient address
+            BigInteger mintAmount = BigInteger.valueOf(1000); // Amount to mint (for ERC-20) or tokenId (for ERC-721)
 
-        // Step 1: Use Headlong to encode the contract function call with arguments
-        Function function = new Function(functionSignature, new TypeReference[]{TypeReference.create(BigInteger.class)});
-        byte[] encodedData = function.encodeArguments(functionArgument);
+            // Create mint function: For ERC-20 mint(address, uint256)
+            Function mintFunction = new Function(
+                    "mint", // Name of the function
+                    Arrays.asList(
+                            new Address(toAddress), // Address to mint to
+                            new Uint256(mintAmount) // Amount to mint (or tokenId for ERC-721)
+                    ),
+                    Arrays.asList() // Output types (not needed for generating callData)
+            );
 
-        // Print out the encoded data for the function call (this is the data you'll send to Ethereum)
-        System.out.println("Encoded Data: " + Arrays.toString(encodedData));
+            // Encode function and parameters to generate callData
+            String callData = FunctionEncoder.encode(mintFunction);
+            System.out.println("Generated callData for minting: " + callData);
 
-        // Step 2: Manually sign the transaction (i.e., create a transaction payload)
-        String nonce = "0"; // Replace with the actual nonce of your account
-        BigInteger gasPrice = maxFeePerGas;  // Set the gas price (we'll use max fee per gas)
-        BigInteger chainId = BigInteger.valueOf(1);  // Mainnet chain ID
+            // Prepare the UserOperation data
+            JSONObject userOperation = new JSONObject();
+            userOperation.put("sender", "0xYourSenderAddress"); // Sender address
+            userOperation.put("nonce", "0");  // Nonce (transaction count) for the sender (replace as necessary)
+            userOperation.put("initCode", "0x");  // Initialization code (empty for now)
+            userOperation.put("callData", callData);  // The callData for the mint function
+            userOperation.put("callGasLimit", "100000");  // Gas limit for the call
+            userOperation.put("verificationGasLimit", "50000");  // Gas limit for verification
+            userOperation.put("preVerificationGas", "21000");  // Pre-verification gas
+            userOperation.put("maxFeePerGas", "20000000000");  // Max fee per gas (in Wei)
+            userOperation.put("maxPriorityFeePerGas", "1000000000");  // Max priority fee per gas (in Wei)
+            userOperation.put("paymaster", "0x");  // No paymaster, set to 0x if not used
+            userOperation.put("paymasterData", "0x");  // Paymaster data (if applicable)
 
-        // Build the transaction payload (simplified version)
-        String txData = buildTransactionData(TARGET_CONTRACT_ADDRESS, encodedData, gasLimit, gasPrice, nonce, chainId);
+            // Generate the UserOperation hash that will be signed
+            String userOperationHash = generateUserOperationHash(userOperation);
+            System.out.println("Generated UserOperation Hash: " + userOperationHash);
 
-        // Sign the transaction
-        String signedTransaction = signTransaction(txData);
+            // Sign the UserOperation hash with the sender's private key
+            String signature = signUserOperation(userOperationHash, SENDER_PRIVATE_KEY);
+            userOperation.put("signature", signature); // Add the signature to the userOperation
 
-        // Step 3: Send the signed transaction to the Ethereum network via JSON-RPC
-        sendTransactionViaHttpJsonRpc(signedTransaction);
+            // Wrap the UserOperation in a JSON array (as the API expects an array of operations)
+            JSONArray userOperations = new JSONArray();
+            userOperations.put(userOperation);
+
+            // Prepare the request body for the Bundler API
+            JSONObject requestBody = new JSONObject();
+            requestBody.put("jsonrpc", "2.0");
+            requestBody.put("id", 1);
+            requestBody.put("method", "eth_sendUserOperation");
+            requestBody.put("params", new JSONArray().put(userOperations));
+
+            // Make the HTTP request to the Alchemy Bundler API
+            HttpURLConnection connection = (HttpURLConnection) new java.net.URL(ALCHEMY_API_URL).openConnection();
+            connection.setRequestMethod("POST");
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setDoOutput(true);
+            connection.getOutputStream().write(requestBody.toString().getBytes());
+
+            // Read the response from Alchemy
+            BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+            String inputLine;
+            StringBuilder response = new StringBuilder();
+            while ((inputLine = in.readLine()) != null) {
+                response.append(inputLine);
+            }
+            in.close();
+
+            // Print the response (the transaction hash)
+            System.out.println("Response from Alchemy Bundler API: " + response.toString());
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
-    // Build the transaction data (simplified for illustration)
-    private static String buildTransactionData(String targetAddress, byte[] data, BigInteger gasLimit,
-                                               BigInteger gasPrice, String nonce, BigInteger chainId) {
-        // Transaction data (to, gas, nonce, data, etc.) formatted into raw transaction format
-        String txData = targetAddress + " " + data.length + " " + gasLimit + " " + gasPrice + " " + nonce + " " + chainId;
-        return txData;
+    // Method to generate the UserOperation hash
+    private static String generateUserOperationHash(JSONObject userOperation) {
+        // You should hash the relevant fields for the UserOperation (sender, nonce, callData, etc.)
+        // For the sake of this example, let's assume we're hashing some of the fields.
+        // The real hash computation depends on the ERC-4337 standard and must follow the specified procedure.
+
+        // Concatenate the fields into a string
+        String data = userOperation.getString("sender") +
+                userOperation.getString("nonce") +
+                userOperation.getString("callData") +
+                userOperation.getString("callGasLimit") +
+                userOperation.getString("verificationGasLimit") +
+                userOperation.getString("preVerificationGas") +
+                userOperation.getString("maxFeePerGas") +
+                userOperation.getString("maxPriorityFeePerGas");
+
+        // Hash the concatenated data (simple SHA-256 hash in this example, but you should follow the ERC-4337 standard)
+        return Numeric.toHexString(Sha256Hash.of(data.getBytes()).getBytes());
     }
 
-    // Sign the transaction with the sender's private key
-    private static String signTransaction(String txData) throws Exception {
-        // Extract ECKeyPair from the sender's private key
-        ECKeyPair keyPair = ECKeyPair.create(new BigInteger(SENDER_PRIVATE_KEY, 16));
-        byte[] txDataBytes = txData.getBytes(StandardCharsets.UTF_8);
+    // Method to sign the UserOperation hash with the sender's private key
+    private static String signUserOperation(String userOperationHash, String privateKey) throws Exception {
+        // Load the sender's credentials from the private key
+        Credentials credentials = Credentials.create(privateKey);
 
-        // Sign the transaction with the private key
-        Sign.SignatureData signature = Sign.signMessage(txDataBytes, keyPair);
+        // Convert the hash to BigInteger
+        BigInteger hashAsBigInteger = new BigInteger(userOperationHash.substring(2), 16);
 
-        // Combine the signed data (raw transaction + signature)
-        byte[] signedTransaction = Arrays.copyOf(txDataBytes, txDataBytes.length + signature.getR().length + signature.getS().length + 1);
-        System.arraycopy(signature.getR(), 0, signedTransaction, txDataBytes.length, signature.getR().length);
-        System.arraycopy(signature.getS(), 0, signedTransaction, txDataBytes.length + signature.getR().length, signature.getS().length);
-        signedTransaction[txDataBytes.length + signature.getR().length + signature.getS().length] = signature.getV()[0];
+        // Sign the hash with the sender's private key
+        ECKeyPair ecKeyPair = credentials.getEcKeyPair();
+        Sign.SignatureData signatureData = Sign.signMessage(hashAsBigInteger.toByteArray(), ecKeyPair);
 
-        return new String(signedTransaction);
-    }
-
-    // Send the signed transaction to Ethereum using HTTP JSON-RPC
-    private static void sendTransactionViaHttpJsonRpc(String signedTransaction) {
-        // You would send the signed transaction to an Ethereum node or service like Infura/Alchemy via HTTP POST request
-        // Here's an example of what the payload might look like:
-        String jsonRpcPayload = "{\n" +
-                "  \"jsonrpc\": \"2.0\",\n" +
-                "  \"method\": \"eth_sendRawTransaction\",\n" +
-                "  \"params\": [\"" + signedTransaction + "\"],\n" +
-                "  \"id\": 1\n" +
-                "}";
-
-        // Send the HTTP POST request with the signed transaction (this part is simplified)
-        System.out.println("Sending raw transaction: " + jsonRpcPayload);
-
-        // You can use an HTTP library (like HttpURLConnection or Apache HttpClient) to send the request to your Ethereum node (Infura, Alchemy, etc.)
-    }
-
-    // Main entry point
-    public static void main(String[] args) throws Exception {
-        sendUserOpWithPaymaster();
+        // Return the signature in the format expected by ERC-4337
+        return Numeric.toHexStringNoPrefix(signatureData.getR()) + Numeric.toHexStringNoPrefix(signatureData.getS()) + Integer.toHexString(signatureData.getV());
     }
 }
+
